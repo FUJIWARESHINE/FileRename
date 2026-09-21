@@ -25,9 +25,11 @@ import json
 import os
 import threading
 import uuid
+from datetime import datetime
 
 import clipboard
 import rules
+import xlsx
 
 _MOD_LABELS = {'ctrl': 'Ctrl', 'alt': 'Alt', 'shift': 'Shift', 'meta': 'Win'}
 
@@ -221,6 +223,7 @@ class Bridge:
             'remove': sel,
             'copy': bool(self.items),
             'clear': bool(self.roots or self.children),
+            'clearRules': bool(self.workflow),
             'home': bool(self.crumbs),
         }
 
@@ -312,7 +315,7 @@ class Bridge:
         payload['toast'] = self._toast('已导入 %d 项%s' % (len(added), extra))
         return payload
 
-    def _dialog(self, kind: str):
+    def _dialog(self, kind: str, save_filename: str = '', file_types: tuple = ()):
         try:
             import webview
             dialog = getattr(webview, 'FileDialog', None)
@@ -322,10 +325,55 @@ class Bridge:
                 types = {'open': getattr(webview, 'OPEN_DIALOG', 10),
                          'folder': getattr(webview, 'FOLDER_DIALOG', 20),
                          'save': getattr(webview, 'SAVE_DIALOG', 30)}
-            result = self._window.create_file_dialog(types[kind], allow_multiple=(kind != 'folder'))
+            try:
+                result = self._window.create_file_dialog(
+                    types[kind], allow_multiple=(kind != 'folder'),
+                    save_filename=save_filename, file_types=file_types)
+            except TypeError:
+                # 老版本 pywebview 不认 save_filename / file_types
+                result = self._window.create_file_dialog(types[kind], allow_multiple=(kind != 'folder'))
             return result or []
         except Exception:
             return []
+
+    def export_names(self) -> dict:
+        """把当前列表的文件名导出成 Excel（原始名 / 新名 / 目录 / 类型 / 大小 / 时间 / 状态）。"""
+        with self.lock:
+            base = self._view_base()
+            rows = [[i + 1, item.name, item.new_name,
+                     rules.rel_dir(item, base), rules.type_label(item),
+                     rules.human_size(item.size, item.is_dir),
+                     rules.fmt_time(item.mtime),
+                     rules.STATUS_LABEL.get(item.status, item.status)]
+                    for i, item in enumerate(self.items)]
+        if not rows:
+            return self._payload(rows=False,
+                                 toast=self._toast('列表是空的，先导入文件再导出', 'warn'))
+
+        default = '文件清单_%s.xlsx' % datetime.now().strftime('%Y%m%d_%H%M%S')
+        picked = self._dialog('save', save_filename=default,
+                              file_types=('Excel 工作簿 (*.xlsx)',))
+        if isinstance(picked, str):
+            path = picked
+        elif isinstance(picked, (list, tuple)) and picked:
+            path = str(picked[0])
+        else:
+            path = ''
+        if not path:
+            return self._payload(rows=False)          # 用户取消
+        if not path.lower().endswith('.xlsx'):
+            path += '.xlsx'
+        try:
+            written = xlsx.write_sheet(
+                path,
+                header=['序号', '原始名称', '新名称预览', '所在目录', '类型', '大小', '修改时间', '状态'],
+                rows=rows, sheet_name='文件名清单',
+                widths=[6, 34, 34, 24, 10, 11, 18, 10], numeric_columns=(0,))
+        except OSError as exc:
+            return self._payload(rows=False,
+                                 toast=self._toast('导出失败：%s' % exc, 'error'))
+        return self._payload(rows=False,
+                             toast=self._toast('已导出 %d 条文件名：%s' % (written, path)))
 
     def clear_items(self) -> dict:
         with self.lock:
@@ -457,7 +505,7 @@ class Bridge:
     def clear_rules(self) -> dict:
         with self.lock:
             self.workflow = []
-            return self._refresh(workflow=True, toast=self._toast('已清空工作流'))
+            return self._refresh(workflow=True, toast=self._toast('已清空已添加的规则'))
 
     # ------------------------------------------------------------------ 列表操作
     def toggle_select(self, tag: str, value=None) -> dict:

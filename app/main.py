@@ -15,7 +15,7 @@ import webview
 from bridge import Bridge, window_geometry
 
 APP_NAME = '文件批量重命名'
-APP_VERSION = '2.0.3'
+APP_VERSION = '2.1.0'
 WINDOW_TITLE = '%s v%s' % (APP_NAME, APP_VERSION)
 
 
@@ -156,21 +156,6 @@ class App:
         self._restore_rect = None
         # 前端可能在窗口线程启动前后任意时刻来取状态，这里先挂上标记
         self.bridge._demo_pending = demo
-        self._restore_workflow()
-
-    def _restore_workflow(self) -> None:
-        saved = self.config.get('workflow')
-        if not isinstance(saved, list):
-            return
-        import rules
-        for step in saved:
-            rid = step.get('id')
-            if rid not in rules.RULE_MAP:
-                continue
-            config = rules.default_config(rid)
-            config.update(step.get('config') or {})
-            self.bridge.workflow.append({'id': rid, 'enabled': step.get('enabled', True),
-                                         'config': config})
 
     # ------------------------------------------------------------------ 窗口
     def run(self) -> None:
@@ -217,13 +202,16 @@ class App:
                       debug=False, private_mode=False, storage_path=data_dir())
 
     def _snapshot_config(self, geometry: dict | None = None) -> dict:
-        """要落盘的配置：窗口几何 + 规则工作流 + 主题。"""
+        """要落盘的配置：窗口几何 + 主题。
+
+        规则工作流刻意不落盘：每次打开都从空白开始，否则下次启动还挂着上次的规则，
+        得先手动删一遍才能做新的。老配置里残留的 workflow 键也顺手清掉。
+        """
         data = dict(self.config)
+        data.pop('workflow', None)
         if geometry:
             data['geometry'] = geometry
         data.update({
-            'workflow': [{'id': s['id'], 'enabled': s.get('enabled', True),
-                          'config': s.get('config', {})} for s in self.bridge.workflow],
             'theme': self.bridge.config.get('theme', 'dark'),
         })
         return data

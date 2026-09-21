@@ -217,6 +217,43 @@ svg use { pointer-events: none; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-dim); }
 .btn.ghost:hover:not(:disabled) { color: var(--fg); background: var(--panel); }
 
+/* 「清空」下拉：红色底 + 常驻流光高光带（hover 时流得更快） */
+.btn.clear-menu {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, .38);
+  background: linear-gradient(135deg, rgba(248, 113, 113, .2), rgba(239, 68, 68, .1) 55%, rgba(248, 113, 113, .18));
+  box-shadow: 0 10px 26px -18px rgba(248, 113, 113, 1);
+}
+.btn.clear-menu:hover:not(:disabled) {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(248, 113, 113, .34), rgba(239, 68, 68, .2));
+  border-color: rgba(248, 113, 113, .62);
+  box-shadow: 0 14px 30px -14px rgba(248, 113, 113, 1);
+}
+.btn.clear-menu::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 25%, rgba(255, 255, 255, .4) 48%, transparent 68%);
+  transform: translateX(-130%);
+  animation: clearFlow 3.4s var(--ease) infinite;
+}
+.btn.clear-menu:hover:not(:disabled)::after { animation-duration: 1.4s; }
+.btn.clear-menu:disabled::after { animation: none; }
+@keyframes clearFlow {
+  0% { transform: translateX(-130%); }
+  60%, 100% { transform: translateX(130%); }
+}
+[data-theme="light"] .btn.clear-menu { color: #b91c1c; }
+[data-theme="light"] .btn.clear-menu:hover:not(:disabled) { color: #fff; }
+
+/* 清空菜单里的两项：文件 / 规则，各自带一句说明 */
+.menu-item .menu-note { margin-left: auto; font-size: 10.5px; font-style: normal; color: var(--fg-mute); }
+
+/* 「清空」右侧的下拉箭头小一号，跟文字更贴 */
+.btn.clear-menu svg:last-child { width: 11px; height: 11px; opacity: .85; }
+.btn.clear-menu span { margin: 0 1px; }
+
 .btn.warn { color: #fcd34d; border-color: rgba(251, 191, 36, .3); background: rgba(251, 191, 36, .08); }
 .btn.warn:hover:not(:disabled) { background: rgba(251, 191, 36, .16); border-color: rgba(251, 191, 36, .5); }
 
@@ -666,8 +703,10 @@ svg use { pointer-events: none; }
 
 /* ---------------------------------------------------------------- 预览区 */
 .preview {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  /* 必须能收缩：窗口拉矮时否则会按内容撑开，把状态栏和表格挤出去 */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -876,14 +915,16 @@ svg use { pointer-events: none; }
 
 /* 空状态 */
 .empty {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
   color: var(--fg-mute);
-  padding-bottom: 40px;
+  padding: 10px 16px 24px;
 }
 .empty-art {
   width: 78px;
@@ -1338,3 +1379,26 @@ svg use { pointer-events: none; }
 [data-theme="light"] .btn.danger:hover:not(:disabled) { color: #fff; }
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, .18); background-clip: content-box; }
 [data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(15, 23, 42, .3); background-clip: content-box; }
+
+/* ---------------------------------------------------------------- 矮窗口自适应
+   把窗口从下往上拉小时，规则面板先收窄并自己滚动，列表区永远保留可见高度，
+   空状态则逐级精简（先去掉提示胶囊、再去掉图标），避免内容被截断或互相压住。 */
+@media (max-height: 760px) {
+  .mode-panel { max-height: 34vh; }
+  .empty { padding-bottom: 16px; gap: 8px; }
+  .empty-art { width: 64px; height: 64px; border-radius: 20px; margin-bottom: 2px; }
+}
+@media (max-height: 640px) {
+  .mode-panel { max-height: 28vh; }
+  .titlebar { height: 42px; }
+  .toolbar { padding: 8px 14px; }
+  .empty-art { display: none; }
+  .empty-tip { display: none; }
+}
+@media (max-height: 520px) {
+  .mode-panel { max-height: 24vh; padding: 8px 14px 10px; gap: 8px; }
+  .empty { gap: 4px; }
+  .empty .empty-art { display: none; }
+  .empty h3 { font-size: 13px; }
+  .empty p { font-size: 11px; }
+}

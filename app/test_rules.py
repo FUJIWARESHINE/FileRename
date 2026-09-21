@@ -79,13 +79,22 @@ class TestCaseRule(unittest.TestCase):
 
 class TestSequence(unittest.TestCase):
     def test_prefix(self):
+        # 分隔符默认为空：序号直接和原名相连，想要下划线得自己填 sep
         self.assertEqual(run('sequence', 'photo.jpg', {'start': 1, 'step': 1, 'digits': 3, 'pos': 'prefix'}, index=0),
-                         '001_photo.jpg')
+                         '001photo.jpg')
         self.assertEqual(run('sequence', 'photo.jpg', {'start': 1, 'step': 2, 'digits': 2, 'pos': 'prefix'}, index=3),
-                         '07_photo.jpg')
+                         '07photo.jpg')
+
+    def test_prefix_with_separator(self):
+        c = {'start': 1, 'step': 1, 'digits': 3, 'pos': 'prefix', 'sep': '_'}
+        self.assertEqual(run('sequence', 'photo.jpg', c, index=0), '001_photo.jpg')
+        c['sep'] = '-'
+        self.assertEqual(run('sequence', 'photo.jpg', c, index=0), '001-photo.jpg')
 
     def test_suffix_and_replace(self):
-        self.assertEqual(run('sequence', 'photo.jpg', {'digits': 0, 'pos': 'suffix'}, index=4), 'photo_5.jpg')
+        self.assertEqual(run('sequence', 'photo.jpg', {'digits': 0, 'pos': 'suffix'}, index=4), 'photo5.jpg')
+        self.assertEqual(run('sequence', 'photo.jpg',
+                             {'digits': 0, 'pos': 'suffix', 'sep': '_'}, index=4), 'photo_5.jpg')
         self.assertEqual(run('sequence', 'photo.jpg',
                              {'digits': 3, 'pos': 'replace', 'template': 'IMG_{n}'}, index=6), 'IMG_007.jpg')
         self.assertEqual(run('sequence', 'photo.jpg',
@@ -105,6 +114,15 @@ class TestTemplate(unittest.TestCase):
 
 
 class TestTimestamp(unittest.TestCase):
+    def test_prefix_suffix_separator(self):
+        # 默认不加分隔符，要加自己填
+        cfg = {'src': 'mtime', 'format': 'YYYYMMDD', 'pos': 'prefix'}
+        self.assertEqual(run('timestamp', 'doc.pdf', cfg), '20240305doc.pdf')
+        cfg['sep'] = '_'
+        self.assertEqual(run('timestamp', 'doc.pdf', cfg), '20240305_doc.pdf')
+        cfg['pos'] = 'suffix'
+        self.assertEqual(run('timestamp', 'doc.pdf', cfg), 'doc_20240305.pdf')
+
     def test_now_format_len(self):
         out = run('timestamp', 'doc.pdf', {'src': 'now', 'format': 'YYYY-MM-DD_HH-mm-ss'})
         self.assertEqual(len(out), len('2024-01-01_00-00-00') + len('.pdf'))
@@ -191,7 +209,7 @@ class TestWorkflow(unittest.TestCase):
             {'id': 'clean', 'enabled': True, 'config': dict(default_config('clean'), mode='underscore')},
             {'id': 'case', 'enabled': True, 'config': {'mode': 'lower'}},
             {'id': 'sequence', 'enabled': True,
-             'config': {'start': 1, 'step': 1, 'digits': 3, 'pos': 'prefix'}},
+             'config': {'start': 1, 'step': 1, 'digits': 3, 'pos': 'prefix', 'sep': '_'}},
         ]
         build_names(files, wf)
         # 大小写规则默认只改主名，扩展名交给「扩展名处理」规则
@@ -312,7 +330,7 @@ class TestNumerals(unittest.TestCase):
         self.assertEqual(run('sequence', 'a.jpg', c, index=0), '一.jpg')
         self.assertEqual(run('sequence', 'a.jpg', c, index=9), '一十.jpg')
         c2 = {'start': 1, 'digits': 3, 'numType': 'en_upper', 'pos': 'prefix'}
-        self.assertEqual(run('sequence', 'a.jpg', c2, index=0), '00A_a.jpg')
+        self.assertEqual(run('sequence', 'a.jpg', c2, index=0), '00Aa.jpg')
 
 
 class TestExtractRule(unittest.TestCase):
@@ -569,7 +587,7 @@ class TestNumeralsExtra(unittest.TestCase):
 
     def test_sequence_rule_uses_new_systems(self):
         cfg = {'start': 4, 'step': 1, 'numType': 'roman_upper', 'digits': 0, 'pos': 'prefix'}
-        self.assertEqual(run('sequence', 'photo.jpg', cfg, index=0), 'IV_photo.jpg')
+        self.assertEqual(run('sequence', 'photo.jpg', cfg, index=0), 'IVphoto.jpg')
 
 
 def _pack_ifd(entries, ifd_offset):
@@ -791,6 +809,75 @@ class TestBridgeNavigation(unittest.TestCase):
             self.bridge.clear_items()
             self.assertEqual(self.bridge.items, [])
             self.assertEqual(self.bridge.crumbs, [])
+
+    def test_clear_rules_keeps_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.bridge.add_paths([tmp])
+            self.bridge.workflow = [{'id': 'affix', 'enabled': True,
+                                     'config': {'prefix': 'x_', 'suffix': ''}}]
+            self.assertTrue(self.bridge._can()['clearRules'])
+
+            payload = self.bridge.clear_rules()
+            self.assertEqual(self.bridge.workflow, [])
+            self.assertFalse(self.bridge._can()['clearRules'])
+            self.assertTrue(self.bridge.items)                 # 清规则不动文件
+            self.assertEqual(payload['workflow'], [])
+
+            payload = self.bridge.clear_items()
+            self.assertEqual(self.bridge.items, [])
+            self.assertFalse(payload['can']['clear'])
+
+    def test_export_names_without_items_warns(self):
+        payload = self.bridge.export_names()
+        self.assertEqual(payload['toast']['type'], 'warn')
+        self.assertIn('空', payload['toast']['text'])
+
+
+class TestExportXlsx(unittest.TestCase):
+    """导出的 xlsx 得是 Excel / WPS 能直接打开的合法包。"""
+
+    PARTS = ('[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml',
+             'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/worksheets/sheet1.xml')
+
+    def test_write_sheet_is_valid_xlsx(self):
+        import xml.etree.ElementTree as ET
+        import zipfile
+
+        import xlsx
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'names.xlsx')
+            written = xlsx.write_sheet(path, header=['序号', '名称'],
+                                       rows=[[1, 'a.jpg'], [2, 'b&c<d>.jpg']],
+                                       sheet_name='文件名清单', widths=[6, 30],
+                                       numeric_columns=(0,))
+            self.assertEqual(written, 2)
+            with zipfile.ZipFile(path) as zf:
+                self.assertIsNone(zf.testzip())
+                parts = zf.namelist()
+                sheet = zf.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            for name in self.PARTS:
+                self.assertIn(name, parts)
+            ET.fromstring(sheet)                          # 良构 XML 才能被 Excel 解析
+            self.assertIn('b&amp;c&lt;d&gt;.jpg', sheet)
+            self.assertIn('<v>2</v>', sheet)              # 序号写成数字单元格
+
+    def test_sheet_name_capped_and_illegal_chars_stripped(self):
+        import xml.etree.ElementTree as ET
+        import zipfile
+
+        import xlsx
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'x.xlsx')
+            xlsx.write_sheet(path, header=['名称'], rows=[['bad\x07name']],
+                             sheet_name='名' * 40)
+            with zipfile.ZipFile(path) as zf:
+                workbook = zf.read('xl/workbook.xml').decode('utf-8')
+                sheet = zf.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            ET.fromstring(workbook)
+            self.assertIn('name="%s"' % ('名' * 31), workbook)
+            self.assertIn('badname', sheet)
 
 
 if __name__ == '__main__':

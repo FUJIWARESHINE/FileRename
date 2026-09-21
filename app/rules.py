@@ -339,6 +339,8 @@ RULES: list[dict[str, Any]] = [
             _f('pos', '位置', 'select', 'prefix', options=[
                 ('prefix', '前缀'), ('suffix', '后缀（扩展名前）'),
                 ('replace', '替换整个主名')]),
+            _f('sep', '分隔符', default='', placeholder='留空 = 与原名直接相连',
+               show_if={'pos': ['prefix', 'suffix']}),
             _f('template', '替换模板', default='IMG_{n}',
                show_if={'pos': ['replace']}),
         ],
@@ -396,6 +398,8 @@ RULES: list[dict[str, Any]] = [
             _f('pos', '位置', 'select', 'replace', options=[
                 ('replace', '替换整个主名'), ('prefix', '作为前缀'),
                 ('suffix', '作为后缀')]),
+            _f('sep', '分隔符', default='', placeholder='留空 = 与原名直接相连',
+               show_if={'pos': ['prefix', 'suffix']}),
         ],
     },
     {
@@ -730,10 +734,12 @@ def _r_sequence(name: str, c: dict, ctx: dict) -> str:
     num = _num_text(c, ctx)
     base, ext = split_name(name, ctx.get('is_dir', False))
     pos = c.get('pos') or 'prefix'
+    # 分隔符留空就是直接相连（默认如此），要下划线自己填
+    sep = c.get('sep') or ''
     if pos == 'prefix':
-        return num + '_' + base + ext
+        return num + sep + base + ext
     if pos == 'suffix':
-        return base + '_' + num + ext
+        return base + sep + num + ext
     tpl = c.get('template') or 'IMG_{n}'
     out = (tpl.replace('{n}', num)
               .replace('{name}', base)
@@ -799,10 +805,11 @@ def _r_timestamp(name: str, c: dict, ctx: dict) -> str:
     text = format_pattern(moment, c.get('format') or 'YYYY-MM-DD_HH-mm-ss')
     base, ext = split_name(name, ctx.get('is_dir', False))
     pos = c.get('pos') or 'replace'
+    sep = c.get('sep') or ''
     if pos == 'prefix':
-        return text + '_' + base + ext
+        return text + sep + base + ext
     if pos == 'suffix':
-        return base + '_' + text + ext
+        return base + sep + text + ext
     return text + ext
 
 

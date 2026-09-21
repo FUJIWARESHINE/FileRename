@@ -72,6 +72,8 @@ const SHORTCUTS = [
   ['Delete', '把选中项从列表移除'],
   ['F5', '重新读取磁盘目录'],
   ['Ctrl + T', '深色 / 浅色主题'],
+  ['「更多」菜单', '把当前列表的文件名导出成 Excel'],
+  ['「清空」菜单', '分开清空文件列表 / 已添加的规则'],
   ['F1 / Esc', '使用说明 / 关闭弹层'],
 ];
 
@@ -383,7 +385,8 @@ function showMenu(x, y, items) {
     if (it.sep) return '<div class="menu-sep"></div>';
     const mark = it.checked ? icon('i-check') : (it.icon ? icon(it.icon) : '');
     return '<div class="menu-item' + (it.disabled ? ' disabled' : '') + (it.checked ? ' on' : '') +
-      '" data-id="' + it.id + '">' + mark + '<span>' + esc(it.text) + '</span></div>';
+      '" data-id="' + it.id + '">' + mark + '<span>' + esc(it.text) + '</span>' +
+      (it.note ? '<span class="menu-note">' + esc(it.note) + '</span>' : '') + '</div>';
   }).join('');
   menu.hidden = false;
   const rect = menu.getBoundingClientRect();
@@ -395,7 +398,7 @@ function showMenu(x, y, items) {
     if (!item) return;
     hideLayers();
     const found = items.find((it) => String(it.id) === item.dataset.id);
-    if (found && found.run) found.run();
+    if (found && found.run && !found.disabled) found.run();
   };
 }
 
@@ -465,7 +468,8 @@ function renderButtons() {
   $('#btnRevert').disabled = !c.revert;
   $('#btnRemove').disabled = !c.remove;
   $('#btnCopy').disabled = !c.copy;
-  $('#btnClear').disabled = !c.clear;
+  // 有文件或有规则，都应该能点开「清空」选择清哪一样
+  $('#btnClear').disabled = !c.clear && !c.clearRules;
 }
 
 /* ------------------------------------------------------------------ 模式栏 */
@@ -491,9 +495,21 @@ function renderModebar() {
   });
   $('#btnMoreModes').onclick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    showMenu(rect.left, rect.bottom + 6, MORE_MODES.map((m) => ({
+    const total = (state.stats && state.stats.total) || 0;
+    const items = MORE_MODES.map((m) => ({
       id: m.id, text: m.name, run: () => switchMode(m.id),
-    })));
+    }));
+    items.push({ sep: true });
+    // 与模式无关的附加动作：把当前列表里的文件名导出成 Excel
+    items.push({
+      id: 'exportExcel',
+      text: '导出文件名到 Excel',
+      icon: 'i-sheet',
+      note: total ? total + ' 项' : '列表为空',
+      disabled: !total,
+      run: () => call('export_names'),
+    });
+    showMenu(rect.left, rect.bottom + 6, items);
   };
   renderStats();
 }
@@ -588,7 +604,7 @@ function fieldHtml(index, field, step) {
   } else {
     const kind = field.type === 'number' ? 'number' : 'text';
     control = '<input type="' + kind + '"' + attrs + ' value="' + esc(value == null ? '' : value) +
-      '" placeholder="' + esc(field.label) + '" />';
+      '" placeholder="' + esc(field.placeholder || field.label) + '" />';
   }
   return '<div class="field"><label title="' + esc(field.label) + '">' + esc(field.label) +
     '</label>' + control + '</div>';
@@ -961,7 +977,21 @@ function bindToolbar() {
   $('#btnPickFiles').onclick = () => call('pick_files');
   $('#btnPickFolder').onclick = () => call('pick_folder');
   $('#btnPaste').onclick = () => call('paste_clipboard');
-  $('#btnClear').onclick = () => call('clear_items');
+  // 「清空」下拉：文件列表和规则互不影响，分开清
+  $('#btnClear').onclick = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const c = state.can || {};
+    const s = state.stats || {};
+    const rules = (state.workflow || []).length;
+    showMenu(rect.left, rect.bottom + 6, [
+      { id: 'clearItems', text: '清空文件列表', icon: 'i-trash',
+        note: s.total ? s.total + ' 项' : '', disabled: !c.clear,
+        run: () => call('clear_items') },
+      { id: 'clearRules', text: '清空已添加的规则', icon: 'i-close',
+        note: rules ? rules + ' 条' : '', disabled: !c.clearRules,
+        run: () => call('clear_rules') },
+    ]);
+  };
   $('#btnRemove').onclick = () => call('remove_items', null);
   $('#btnTheme').onclick = toggleTheme;
   $('#btnHelp').onclick = showHelpDialog;
