@@ -15,7 +15,7 @@ import webview
 from bridge import Bridge, window_geometry
 
 APP_NAME = '文件批量重命名'
-APP_VERSION = '2.0.1'
+APP_VERSION = '2.0.2'
 WINDOW_TITLE = '%s v%s' % (APP_NAME, APP_VERSION)
 
 
@@ -368,6 +368,41 @@ def enable_dpi_awareness() -> None:
         pass
 
 
+def report_fatal(exc: BaseException) -> None:
+    """启动失败的兜底提示：写日志 + 中文对话框。
+
+    界面后端（WebView2 / pythonnet / .NET Framework）的问题都会在
+    webview.start() 这一步炸出来，直接抛出去的话用户只能看到一堆英文堆栈，
+    这里换成能照着做的中文说明，同时把完整堆栈留在日志里。
+    """
+    import traceback
+    detail = traceback.format_exc()
+    log_path = ''
+    try:
+        import datetime
+        log_path = os.path.join(app_dir(), '启动错误.log')
+        with open(log_path, 'w', encoding='utf-8') as fh:
+            fh.write('%s\n%s\n' % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), detail))
+    except OSError:
+        log_path = ''
+
+    text = (
+        '程序启动失败：\n%s\n\n'
+        '常见原因与处理办法：\n'
+        '1. 需要 Windows 10 / 11 64 位，且系统带 .NET Framework 4.6.2 以上（一般自带）；\n'
+        '2. 需要 WebView2 运行时，Win10 可安装微软官方「Microsoft Edge WebView2 Runtime」；\n'
+        '3. 如果是从压缩包解压出来的：右键压缩包 → 属性 → 勾选「解除锁定」后再解压；\n'
+        '   也可以解压后在文件夹里执行：Get-ChildItem -Recurse | Unblock-File\n'
+        '4. 目录请放在本地硬盘（不要放网络盘 / 映射盘）。\n'
+        '%s' % (exc, ('\n详细堆栈已写入：%s' % log_path) if log_path else '')
+    )
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, '%s 启动失败' % APP_NAME, 0x10 | 0x40000)
+    except Exception:
+        pass
+
+
 def main() -> None:
     enable_dpi_awareness()
     args = sys.argv[1:]
@@ -375,7 +410,11 @@ def main() -> None:
         # 诊断模式：开启 WebView2 远程调试端口，便于外部连接排查界面问题
         import webview as _w
         _w.settings['REMOTE_DEBUGGING_PORT'] = 9223
-    App(demo='--demo' in args, diag='--diag' in args).run()
+    try:
+        App(demo='--demo' in args, diag='--diag' in args).run()
+    except Exception as exc:          # noqa: BLE001 —— 兜底提示，堆栈写日志
+        report_fatal(exc)
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

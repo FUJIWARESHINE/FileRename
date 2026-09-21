@@ -62,6 +62,16 @@ def build():
         os.replace(out, final)
     except OSError:
         shutil.move(out, final)          # 跨卷等情况下退回 shutil
+
+    # 必须跟着 exe 一起发布：没有它，用户从 zip 解压出来的包（文件带互联网标记）
+    # 会因为 .NET Framework 拒绝 LoadFrom 而启动失败。
+    cfg_src = os.path.join(APP_DIR, NAME + '.exe.config')
+    if os.path.isfile(cfg_src):
+        shutil.copyfile(cfg_src, os.path.join(final, NAME + '.exe.config'))
+    missing = [p for p in (NAME + '.exe', NAME + '.exe.config')
+               if not os.path.isfile(os.path.join(final, p))]
+    if missing:
+        raise RuntimeError('产物不完整，缺少：%s' % '、'.join(missing))
     return os.path.join(final, NAME + '.exe')
 
 
