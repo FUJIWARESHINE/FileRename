@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 打包工作目录与产物（成品通过 GitHub Release 分发）
+build/
+dist/
+
+# 运行时数据（便携配置 / 界面错误日志）
+FileRenamer.json
+app/data/
+*.log
+
+# 第三方参考实现（ZTools 插件独立仓库，不并入本仓库）
+repo/
