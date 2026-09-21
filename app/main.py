@@ -15,7 +15,7 @@ import webview
 from bridge import Bridge, window_geometry
 
 APP_NAME = '文件批量重命名'
-APP_VERSION = '2.0.2'
+APP_VERSION = '2.0.3'
 WINDOW_TITLE = '%s v%s' % (APP_NAME, APP_VERSION)
 
 

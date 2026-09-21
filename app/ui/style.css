@@ -512,8 +512,14 @@ svg use { pointer-events: none; }
   box-shadow: var(--shadow-1);
   transition: left .24s cubic-bezier(.34, 1.4, .5, 1);
 }
-.switch.on { background: var(--grad); }
+/* 启用态：主题渐变 + 品牌色光晕，和复选/主按钮同一套强调色 */
+.switch.on {
+  background: var(--grad);
+  box-shadow: 0 3px 10px -5px rgba(99, 102, 241, .95);
+}
 .switch.on::after { left: 17px; }
+.switch:hover { background: var(--panel-3); }
+.switch.on:hover { background: var(--grad); }
 
 .field { display: flex; align-items: center; gap: 8px; }
 .field label {
@@ -1280,7 +1286,10 @@ svg use { pointer-events: none; }
 [data-theme="light"] .tag { background: rgba(15, 23, 42, .04); }
 [data-theme="light"] .check { background: #fff; }
 [data-theme="light"] .seq { background: rgba(15, 23, 42, .05); }
-[data-theme="light"] .switch { background: rgba(15, 23, 42, .16); }
+/* 只给「停用」态上灰底；启用态继续用主题渐变，避免把 .on 覆盖成灰的 */
+[data-theme="light"] .switch:not(.on) { background: rgba(15, 23, 42, .16); }
+[data-theme="light"] .switch:not(.on):hover { background: rgba(15, 23, 42, .24); }
+[data-theme="light"] .switch.on { background: var(--grad); }
 [data-theme="light"] .field input,
 [data-theme="light"] .field select,
 [data-theme="light"] .field textarea { background-color: #fff; }
