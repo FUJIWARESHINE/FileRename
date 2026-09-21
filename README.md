@@ -9,7 +9,7 @@ Windows 免安装的文件批量重命名工具。绿色版目录，零依赖，
 
 ## 快速开始
 
-1. 把 `dist\文件批量重命名` 整个目录拷走，双击里面的 `FileRenamer.exe`
+1. 双击 `FileRenamer.exe`
 2. 把文件 / 文件夹拖进窗口，或点「选择文件」「选择文件夹」「粘贴导入」（Ctrl+V 可直接粘贴资源管理器里复制的文件）
 3. 导入的文件夹会作为一个节点保留，点它的名称逐层进入；点面包屑可返回上层
 4. 点左下角「+ 添加重命名规则」，规则按从上到下的顺序依次执行
@@ -84,22 +84,3 @@ ztools-rename/
 │   ├── icon.ico         # 程序图标
 │   └── e2e_check.py     # 端到端检查：真实改名 / 撤回 / 冲突拦截 / 目录浏览
 └── README.md
-```
-
-## 从源码打包
-
-```powershell
-# 依赖：Python 3.12 + PyInstaller
-E:\Python312\python.exe app\build.py
-```
-
-脚本调用 PyInstaller（`--onedir --noupx --windowed`）打包出 `dist\FileRenamer`，
-再整理成 `dist\文件批量重命名\` 绿色版目录（前端资源打包在 `_internal\ui\`）。
-`--noupx` 是必须的：UPX 压缩会破坏冻结后的二进制，导致 exe 启动即退出。
-
-## 自测
-
-```powershell
-E:\Python312\python.exe app\test_rules.py   # 101 项单元测试
-E:\Python312\python.exe app\e2e_check.py    # 真实改名 / 撤回 / 冲突拦截 / 目录浏览
-```
