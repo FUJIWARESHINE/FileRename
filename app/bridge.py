@@ -42,6 +42,48 @@ def hk_label(cfg: dict) -> str:
     return ' + '.join(mods + [str(cfg.get('key', '')).upper() or '?'])
 
 
+def window_geometry(hwnd: int) -> dict:
+    """用 Win32 读窗口「还原后」的矩形与是否最大化；读不到返回 {}。
+
+    为什么不用 pywebview 的 window.x / window.width：winforms 平台在 FormClosed
+    里就把窗口实例从 instances 里删掉了，closed 事件里再读只会抛异常（原来的
+    "记住窗口大小"就是这么丢掉几何信息的）。所以必须在 closing 事件（窗口还活着）
+    时用原生句柄读真实矩形。
+
+    取 rcNormalPosition 而不是当前矩形：最大化 / 最小化状态下关窗，也能记住
+    「还原后」的尺寸，下次打开还是自己调好的那个大小。
+    """
+    if not hwnd:
+        return {}
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class WINDOWPLACEMENT(ctypes.Structure):
+            _fields_ = [('length', wintypes.UINT),
+                        ('flags', wintypes.UINT),
+                        ('showCmd', wintypes.UINT),
+                        ('ptMinPosition', wintypes.POINT),
+                        ('ptMaxPosition', wintypes.POINT),
+                        ('rcNormalPosition', wintypes.RECT)]
+
+        user32 = ctypes.windll.user32
+        placement = WINDOWPLACEMENT()
+        placement.length = ctypes.sizeof(WINDOWPLACEMENT)
+        if not user32.GetWindowPlacement(wintypes.HWND(hwnd), ctypes.byref(placement)):
+            return {}
+        rect = placement.rcNormalPosition
+        width = int(rect.right - rect.left)
+        height = int(rect.bottom - rect.top)
+        if width <= 0 or height <= 0:
+            return {}
+        maximized = bool(placement.showCmd == 3) or bool(user32.IsZoomed(wintypes.HWND(hwnd)))
+        return {'x': int(rect.left), 'y': int(rect.top),
+                'width': width, 'height': height, 'maximized': maximized}
+    except Exception:
+        return {}
+
+
 class Bridge:
     def __init__(self, config: dict | None = None) -> None:
         self._window = None
@@ -880,16 +922,16 @@ class Bridge:
                                     max(min_w, r - l), max(min_h, b - t), SWP_NOZORDER)
                 time.sleep(0.01)
 
-            # 松手后保存一次几何信息，关闭时写进配置
-            try:
-                self.config['geometry'] = {
-                    'x': self._window.x, 'y': self._window.y,
-                    'width': self._window.width, 'height': self._window.height,
-                }
-            except Exception:
-                pass
+            # 松手后先记一次，免得用户拖完直接强杀进程导致尺寸丢失
+            geometry = window_geometry(hwnd)
+            if geometry:
+                self.config['geometry'] = geometry
         except Exception:
             pass
+
+    def native_handle(self) -> int:
+        """当前窗口的原生句柄（没有窗口或取不到时返回 0）。"""
+        return self._native_hwnd()
 
     def _native_hwnd(self) -> int:
         """优先取 pywebview 的原生窗口句柄，失败再按标题查找。"""

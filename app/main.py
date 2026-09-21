@@ -12,10 +12,10 @@ import sys
 
 import webview
 
-from bridge import Bridge
+from bridge import Bridge, window_geometry
 
 APP_NAME = '文件批量重命名'
-APP_VERSION = '2.0.0'
+APP_VERSION = '2.0.1'
 WINDOW_TITLE = '%s v%s' % (APP_NAME, APP_VERSION)
 
 
@@ -77,6 +77,33 @@ def visible_on_screen(x, y) -> bool:
     return (left - 4 <= x <= right - 60) and (top - 4 <= y <= bottom - 40)
 
 
+MIN_WIDTH, MIN_HEIGHT = 820, 560          # 与 create_window 的 min_size 保持一致
+MAX_WIDTH, MAX_HEIGHT = 8000, 8000        # 配置被改坏时不至于开出一个巨大的窗口
+
+
+def screen_bounds() -> tuple[int, int]:
+    """当前虚拟桌面的宽高（物理像素），取不到时给个保守值。
+
+    上次在大屏上调好的窗口拿到小屏上要收敛，不然会开出一个比屏幕还大的窗口。
+    """
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        return (int(user32.GetSystemMetrics(78)) or 1920,
+                int(user32.GetSystemMetrics(79)) or 1080)
+    except Exception:
+        return (1920, 1080)
+
+
+def clamp_size(value, default: int, low: int, high: int) -> int:
+    """把配置里的尺寸收敛到合理区间（配置手改坏了也只是回到默认值）。"""
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(size, high))
+
+
 def load_config() -> dict:
     try:
         with open(config_path(), 'r', encoding='utf-8') as fh:
@@ -92,12 +119,28 @@ def load_config() -> dict:
 
 
 def save_config(data: dict) -> None:
+    """原子写配置：先落临时文件再替换。
+
+    关窗时进程可能立刻就退了，直接写目标文件有概率留下半个 JSON，
+    替换写入能保证读到的要么是旧的完整内容、要么是新的完整内容。
+    """
+    try:
+        blob = json.dumps(data, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return
     for path in (config_path(), os.path.join(data_dir(), 'FileRenamer.json')):
+        tmp = path + '.tmp'
         try:
-            with open(path, 'w', encoding='utf-8') as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
+            with open(tmp, 'w', encoding='utf-8') as fh:
+                fh.write(blob)
+            os.replace(tmp, path)
             return
         except OSError:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
             continue
 
 
@@ -109,6 +152,8 @@ class App:
         self.diag = diag
         self.window = None
         self.hotkeys = None
+        self.remember_maximized = False
+        self._restore_rect = None
         # 前端可能在窗口线程启动前后任意时刻来取状态，这里先挂上标记
         self.bridge._demo_pending = demo
         self._restore_workflow()
@@ -130,12 +175,22 @@ class App:
     # ------------------------------------------------------------------ 窗口
     def run(self) -> None:
         geometry = self.config.get('geometry') or {}
-        width = int(geometry.get('width') or 1320)
-        height = int(geometry.get('height') or 860)
+        # 复用上次关闭时记下的窗口大小与位置
+        screen_w, screen_h = screen_bounds()
+        width = clamp_size(geometry.get('width'), 1320, MIN_WIDTH,
+                           max(MIN_WIDTH, min(MAX_WIDTH, screen_w)))
+        height = clamp_size(geometry.get('height'), 860, MIN_HEIGHT,
+                            max(MIN_HEIGHT, min(MAX_HEIGHT, screen_h)))
         x = geometry.get('x')
         y = geometry.get('y')
         if not visible_on_screen(x, y):
             x = y = None
+        # create_window 的 width/height 是客户区尺寸，和记下来的外框矩形差一圈边框，
+        # 窗口起来之后再按真实矩形校正一次，否则每次开合都会缩掉十几个像素
+        self._restore_rect = None
+        if geometry.get('width') or geometry.get('height'):
+            self._restore_rect = {'x': x, 'y': y, 'width': width, 'height': height}
+        self.remember_maximized = bool(geometry.get('maximized'))
         theme = self.config.get('theme', 'dark')
         backdrop = '#0a0e18' if theme != 'light' else '#f2f4fa'
 
@@ -145,7 +200,7 @@ class App:
             js_api=self.bridge,
             width=width, height=height,
             x=x, y=y,
-            min_size=(820, 560),
+            min_size=(MIN_WIDTH, MIN_HEIGHT),
             frameless=True,
             easy_drag=False,          # 拖动只认标题栏的 drag-region，避免抢占边缘缩放手势
             resizable=True,
@@ -155,13 +210,78 @@ class App:
         )
         self.bridge.attach(self.window)
         self.window.events.loaded += self._on_loaded
+        self.window.events.shown += self._on_shown
+        self.window.events.closing += self._on_closing
         self.window.events.closed += self._on_closed
         webview.start(self._after_start, gui='edgechromium',
                       debug=False, private_mode=False, storage_path=data_dir())
 
+    def _snapshot_config(self, geometry: dict | None = None) -> dict:
+        """要落盘的配置：窗口几何 + 规则工作流 + 主题。"""
+        data = dict(self.config)
+        if geometry:
+            data['geometry'] = geometry
+        data.update({
+            'workflow': [{'id': s['id'], 'enabled': s.get('enabled', True),
+                          'config': s.get('config', {})} for s in self.bridge.workflow],
+            'theme': self.bridge.config.get('theme', 'dark'),
+        })
+        return data
+
+    def _on_closing(self) -> None:
+        """关闭前把窗口大小 / 位置落盘。
+
+        必须在这里同步写文件（pywebview 的 closed 事件跑在另一个线程里，进程
+        往往等不到它执行完就退出了，原来的实现就是这么把尺寸丢掉的）；
+        此时原生窗口还没销毁，用句柄读到的矩形才是用户真正调好的那个大小。
+        返回 None = 不取消关闭，不能返回 True。
+        """
+        geometry = window_geometry(self.bridge.native_handle())
+        if geometry:
+            self.config['geometry'] = geometry
+        save_config(self._snapshot_config())
+
     def _after_start(self) -> None:
         self._apply_round_corners()
+        self._apply_saved_geometry()
         self._start_hotkeys()
+
+    def _on_shown(self) -> None:
+        """窗口真正显示出来之后才有原生句柄，几何校正和最大化都要在这里做。"""
+        self._apply_round_corners()
+        self._apply_saved_geometry()
+        if self.remember_maximized:
+            try:
+                self.window.maximize()
+                self.bridge._maxed = True      # 与前端「最大化」按钮的状态对齐
+            except Exception:
+                pass
+
+    def _apply_saved_geometry(self) -> None:
+        """把上次关闭时的窗口矩形原样贴回去。
+
+        create_window 的 width/height 是客户区尺寸，而无边框窗口会砍掉
+        16x39 那圈非客户区，只靠回填参数每次开合都会缩一点，所以窗口起来后
+        按记录的外框矩形用 SetWindowPos 校正一次。
+        """
+        rect = self._restore_rect
+        if not rect:
+            return
+        hwnd = self.bridge.native_handle()
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            SWP_NOZORDER, SWP_NOMOVE = 0x0004, 0x0002
+            flags = SWP_NOZORDER
+            x, y = rect.get('x'), rect.get('y')
+            if x is None or y is None:
+                flags |= SWP_NOMOVE            # 位置不可信（比如换了显示器），只校正尺寸
+            user32.SetWindowPos(hwnd, 0, int(x or 0), int(y or 0),
+                                int(rect['width']), int(rect['height']), flags)
+        except Exception:
+            pass
 
     def _start_hotkeys(self) -> None:
         """全局快捷键（唤出 / 隐藏窗口）：键盘组合 + 鼠标侧键。"""
@@ -227,25 +347,17 @@ class App:
                 pass
 
     def _on_closed(self) -> None:
+        """窗口已销毁，只做收尾。
+
+        配置在 closing 事件里就已经落盘了，这里不再读窗口、也不再写文件：
+        这个回调跑在独立线程里，进程退出时可能把它拦腰截断，
+        再写一次反而有把好配置写坏的风险。
+        """
         if getattr(self, 'hotkeys', None):
             try:
                 self.hotkeys.stop()
             except Exception:
                 pass
-        geometry = {}
-        try:
-            geometry = {'x': self.window.x, 'y': self.window.y,
-                        'width': self.window.width, 'height': self.window.height}
-        except Exception:
-            pass
-        data = dict(self.config)
-        data.update({
-            'geometry': geometry,
-            'workflow': [{'id': s['id'], 'enabled': s.get('enabled', True),
-                          'config': s.get('config', {})} for s in self.bridge.workflow],
-            'theme': self.bridge.config.get('theme', 'dark'),
-        })
-        save_config(data)
 
 
 def enable_dpi_awareness() -> None:
