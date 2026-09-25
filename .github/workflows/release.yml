@@ -13,6 +13,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # runner 控制台默认 cp1252，脚本里的中文 print 会 UnicodeEncodeError
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 
