@@ -1,0 +1,94 @@
+name: Build & Release
+
+# 推 v* tag 自动打包并发 Release；也可在 Actions 页手动触发（只出包不发版）
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pywebview pythonnet clipboard pyinstaller
+
+      # tag 发版时校验 main.py 里的 APP_VERSION 与 tag 一致，防止版本号忘改
+      - name: Check version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: python
+        run: |
+          import os, re, sys
+          tag = os.environ['GITHUB_REF_NAME']
+          src = open('app/main.py', encoding='utf-8').read()
+          ver = re.search(r"APP_VERSION = '([^']+)'", src).group(1)
+          if tag != 'v' + ver:
+              sys.exit('tag %s 与 main.py 的 APP_VERSION (v%s) 不一致，请先改版本号再打 tag' % (tag, ver))
+
+      - name: Run unit tests
+        run: python -m unittest discover -s app -p "test_*.py" -v
+
+      - name: Build portable package
+        run: python app\build.py
+
+      # 用 Python zipfile 压包：条目名按 UTF-8 + 语言标记写入，
+      # Windows 资源管理器 / 7-Zip 解压中文目录名不会乱码（Compress-Archive 不可靠）
+      - name: Zip package
+        shell: python
+        run: |
+          import os, zipfile
+          ref = os.environ.get('GITHUB_REF_NAME', 'manual')
+          ver = ref if ref.startswith('v') else 'manual'
+          src = os.path.join('dist', '文件批量重命名')
+          out = 'FileRenamer-%s-portable.zip' % ver
+          n = 0
+          with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+              for root, dirs, files in os.walk(src):
+                  for f in files:
+                      p = os.path.join(root, f)
+                      zf.write(p, os.path.relpath(p, 'dist'))
+                      n += 1
+          print('%s: %d 个文件' % (out, n))
+          assert n > 10, '压缩包文件数异常，打包可能不完整'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-zip
+          path: FileRenamer-*-portable.zip
+          if-no-files-found: error
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 文件批量重命名 ${{ github.ref_name }}（便携版）
+          body: |
+            Windows 免安装的批量重命名工具，绿色版解压即用，无需安装 Python。
+
+            ## 下载
+
+            下载下方 `FileRenamer-${{ github.ref_name }}-portable.zip`，解压后双击 `文件批量重命名\FileRenamer.exe`。
+
+            ## 更新内容
+
+            详见对应的提交说明与 README；下方自动生成自相邻版本的变更对比。
+
+            ## 运行要求
+
+            - Windows 10 / 11 64 位，需要 WebView2 运行时（Win11 自带）与系统自带的 .NET Framework 4.6.2 以上
+            - 请解压到本地硬盘运行（不要放在网络盘 / 映射盘）
+          generate_release_notes: true
+          files: FileRenamer-*-portable.zip
