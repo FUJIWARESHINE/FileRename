@@ -445,14 +445,19 @@ class Bridge:
             return self._refresh(full=True, toast=self._toast('已重新读取目录'))
 
     # ------------------------------------------------------------------ 工作流
-    def add_rule(self, rule_id: str) -> dict:
+    def add_rule(self, rule_id: str, quiet: bool = False) -> dict:
+        """新增一条规则。
+
+        quiet=True 时不弹「已添加」提示，供前端在切换模块时
+        自动预置默认规则使用（那是初始状态，不是用户的操作反馈）。
+        """
         with self.lock:
             if rule_id not in rules.RULE_MAP:
                 return self._payload(rows=False)
             self.workflow.append({'id': rule_id, 'enabled': True,
                                   'config': rules.default_config(rule_id)})
-            return self._refresh(workflow=True,
-                                 toast=self._toast('已添加「%s」' % rules.rule_name(rule_id)))
+            toast = None if quiet else self._toast('已添加「%s」' % rules.rule_name(rule_id))
+            return self._refresh(workflow=True, toast=toast)
 
     def remove_rule(self, index: int) -> dict:
         with self.lock:

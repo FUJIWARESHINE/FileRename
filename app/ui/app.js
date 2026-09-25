@@ -514,10 +514,37 @@ function renderModebar() {
   renderStats();
 }
 
-function switchMode(id) {
+/* 每个模块首次打开时自动补一条默认规则（该标签页 rules 列表里的第一条），
+   省掉「点添加」这一步。只补第一条：像「自动编号」下的序列号 / 模板替换 /
+   时间命名要是全补上，三条会同时生效、把新名称连着改写好几轮，反而更难用。
+   用户手动删掉预置的那条之后不会再被塞回来（seededModes 记着已经补过）。 */
+const seededModes = new Set();
+
+async function seedModeRule(mode) {
+  if (!mode || !(mode.rules || []).length) return false;
+  if (seededModes.has(mode.id)) return false;
+  seededModes.add(mode.id);
+  const ruleId = mode.rules.filter((id) => RULE_MAP[id])[0];   // 只认主规则，不是「第一条还没加的」
+  if (!ruleId) return false;
+  if (state.workflow.some((step) => step.id === ruleId)) return false;
+  await call('add_rule', ruleId, true);
+  return true;
+}
+
+async function switchMode(id) {
   if (state.mode === id) return;
   state.mode = id;
   store('fr-mode', id);
+  await seedModeRule(activeMode());
+  renderModebar();
+  renderModePanel();
+}
+
+/* 清空规则后回到「每个模块都各有一条默认规则」的初始状态 */
+async function clearRules() {
+  await call('clear_rules');
+  seededModes.clear();
+  await seedModeRule(activeMode());
   renderModebar();
   renderModePanel();
 }
@@ -989,7 +1016,7 @@ function bindToolbar() {
         run: () => call('clear_items') },
       { id: 'clearRules', text: '清空已添加的规则', icon: 'i-close',
         note: rules ? rules + ' 条' : '', disabled: !c.clearRules,
-        run: () => call('clear_rules') },
+        run: () => clearRules() },
     ]);
   };
   $('#btnRemove').onclick = () => call('remove_items', null);
@@ -1147,6 +1174,7 @@ async function init() {
 
   const payload = await box.get_state();
   applyPayload(payload);
+  await seedModeRule(activeMode());
   renderModebar();
   renderModePanel();
   renderItems();

@@ -13,3 +13,8 @@ app/data/
 
 # 第三方参考实现（ZTools 插件独立仓库，不并入本仓库）
 repo/
+
+# 本地开发 / 验证环境（依赖一律装在 D 盘，不进仓库）
+.venv/
+.tmp/
+.pipcache/
