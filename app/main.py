@@ -17,7 +17,7 @@ import autostart
 from bridge import Bridge, window_geometry
 
 APP_NAME = '文件批量重命名'
-APP_VERSION = '2.2.1'
+APP_VERSION = '2.2.2'
 WINDOW_TITLE = '%s v%s' % (APP_NAME, APP_VERSION)
 
 
@@ -147,11 +147,13 @@ def save_config(data: dict) -> None:
 
 
 class App:
-    def __init__(self, demo: bool = False, diag: bool = False) -> None:
+    def __init__(self, demo: bool = False, diag: bool = False,
+                 start_in_tray: bool = False) -> None:
         self.config = load_config()
         self.bridge = Bridge(self.config)
         self.demo = demo
         self.diag = diag
+        self.start_in_tray = start_in_tray   # --tray：开机自启时静默进托盘
         self.window = None
         self.hotkeys = None
         self.tray = None
@@ -324,6 +326,12 @@ class App:
         """窗口真正显示出来之后才有原生句柄，几何校正和最大化都要在这里做。"""
         self._apply_round_corners()
         self._apply_saved_geometry()
+        if self.start_in_tray:
+            # 开机自启：窗口已经拉起来了，稍等一拍等首帧画完再藏进托盘，
+            # 避免和显示逻辑赛跑；也不做最大化（马上就藏，没必要闪一下）
+            self.start_in_tray = False
+            threading.Timer(0.15, self._hide_to_tray).start()
+            return
         if self.remember_maximized:
             try:
                 self.window.maximize()
@@ -490,8 +498,11 @@ def main() -> None:
         # 诊断模式：开启 WebView2 远程调试端口，便于外部连接排查界面问题
         import webview as _w
         _w.settings['REMOTE_DEBUGGING_PORT'] = 9223
+    # 老版本开启过自启的话，把注册表里的启动命令升级成带 --tray 的形式
+    autostart.migrate_tray_flag()
     try:
-        App(demo='--demo' in args, diag='--diag' in args).run()
+        App(demo='--demo' in args, diag='--diag' in args,
+            start_in_tray='--tray' in args).run()
     except Exception as exc:          # noqa: BLE001 —— 兜底提示，堆栈写日志
         report_fatal(exc)
         raise SystemExit(1)

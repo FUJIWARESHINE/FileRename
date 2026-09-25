@@ -19,11 +19,34 @@ VALUE_NAME = 'FileRenamerPro'
 
 
 def _command() -> str:
-    """启动命令：打包后指向 exe；开发态指向 python 解释器 + main.py。"""
+    """启动命令：打包后指向 exe；开发态指向 python 解释器 + main.py。
+
+    统一带上 --tray：开机自启属于「后台常驻」场景，启动后直接藏进托盘，
+    不要把主窗口怼到用户脸上；手动双击 exe 启动时不带这个参数，照常弹窗。
+    """
     if getattr(sys, 'frozen', False):
-        return '"%s"' % sys.executable
+        return '"%s" --tray' % sys.executable
     script = os.path.abspath(sys.argv[0] or 'main.py')
-    return '"%s" "%s"' % (sys.executable, script)
+    return '"%s" "%s" --tray' % (sys.executable, script)
+
+
+def migrate_tray_flag() -> None:
+    """老版本写的自启命令没带 --tray，启动时静默升级一次。
+
+    只在「已开启自启且命令里缺 --tray」时才重写注册表，
+    避免每次启动都去动它；没开启自启时什么都不做。
+    """
+    if winreg is None or not enabled():
+        return
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                            winreg.KEY_QUERY_VALUE) as key:
+            value, _type = winreg.QueryValueEx(key, VALUE_NAME)
+    except OSError:
+        return
+    if '--tray' in str(value):
+        return
+    set_enabled(True)
 
 
 def enabled() -> bool:
@@ -48,7 +71,7 @@ def set_enabled(on: bool) -> tuple[bool, str]:
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
                                     winreg.KEY_SET_VALUE) as key:
                 winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, _command())
-            return True, '已开启开机自启，下次登录 Windows 时自动运行'
+            return True, '已开启开机自启，下次登录 Windows 时自动运行并最小化到托盘'
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
                                 winreg.KEY_SET_VALUE) as key:

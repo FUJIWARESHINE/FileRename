@@ -352,7 +352,7 @@ function showSettingsDialog() {
     '</div></div></div>' +
     '<div class="set-row">' +
     '<div class="set-info"><b>开机自启</b>' +
-    '<p>登录 Windows 后自动运行本程序（写当前用户的「启动」注册表项，不需要管理员权限，随时可关）。</p></div>' +
+    '<p>登录 Windows 后自动运行本程序并最小化到系统托盘，不弹窗口（写当前用户的「启动」注册表项，不需要管理员权限，随时可关）。</p></div>' +
     '<button type="button" class="btn tiny' + (state.autostart ? ' primary' : '') + '" id="btnAutoStart">' +
     (state.autostart ? '已开启' : '已关闭') + '</button>' +
     '</div>' +
