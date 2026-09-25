@@ -27,6 +27,7 @@ import threading
 import uuid
 from datetime import datetime
 
+import autostart
 import clipboard
 import rules
 import xlsx
@@ -98,6 +99,7 @@ class Bridge:
         self.config = config or {}
         self._busy = False
         self.hotkeys = None                   # HotkeyManager，由 App 启动时挂上
+        self.on_hide_to_tray = None           # 点 × 藏托盘的回调，由 App 挂上
 
     # ------------------------------------------------------------------ 基础
     @property
@@ -259,6 +261,8 @@ class Bridge:
                 'theme': self.config.get('theme', 'dark'),
                 'sort': self.config.get('sort', ''),
                 'hotkey': self.config.get('hotkey'),
+                'autostart': autostart.enabled(),
+                'closeAction': 'tray' if str(self.config.get('closeAction') or '') == 'tray' else 'exit',
             },
         }
 
@@ -873,6 +877,41 @@ class Bridge:
         self.config['hotkey'] = None
         return self._payload(rows=False, toast=self._toast('快捷键注册失败，可能已被其他程序占用', 'warn'))
 
+    def pause_hotkey(self) -> dict:
+        """录制快捷键期间暂停钩子。
+
+        不暂停的话：旧的侧键钩子会抢在网页之前把这次按键吞掉（返回 1），
+        结果窗口被藏起来、录制又什么都没收到，设置里回显的一直是旧配置——
+        「按了侧键却显示成 X2」就是这么来的。
+        """
+        if self.hotkeys:
+            self.hotkeys.update(None)
+        return self._payload(rows=False)
+
+    def resume_hotkey(self) -> dict:
+        """录制取消后按配置恢复钩子。"""
+        cfg = self.config.get('hotkey')
+        if cfg and self.hotkeys:
+            if not self.hotkeys.update(cfg):
+                return self._payload(rows=False,
+                                     toast=self._toast('快捷键恢复失败，可能已被其他程序占用', 'warn'))
+        return self._payload(rows=False)
+
+    def set_autostart(self, enabled) -> dict:
+        ok, msg = autostart.set_enabled(bool(enabled))
+        payload = self._payload(rows=False, toast=self._toast(msg, 'ok' if ok else 'error'))
+        payload['autostart'] = autostart.enabled()
+        return payload
+
+    def set_close_action(self, action) -> dict:
+        """点 × 的行为：'tray' 最小化到托盘（可用快捷键随时唤出），'exit' 直接退出。"""
+        value = 'tray' if str(action or '') == 'tray' else 'exit'
+        self.config['closeAction'] = value
+        payload = self._payload(rows=False)
+        payload['closeAction'] = value
+        payload['toast'] = self._toast('点 × 时将%s' % ('最小化到托盘' if value == 'tray' else '直接退出'))
+        return payload
+
     def toggle_visible(self) -> None:
         """全局快捷键命中：窗口可见就隐藏，否则显示并置前。"""
         if not self._window:
@@ -884,6 +923,17 @@ class Bridge:
             if visible:
                 self._window.hide()
                 return
+            self.show_main()
+        except Exception:
+            pass
+
+    def show_main(self) -> None:
+        """显示主窗口并置前（托盘图标 / 全局快捷键唤出共用）。"""
+        if not self._window:
+            return
+        try:
+            import ctypes
+            hwnd = self._native_hwnd()
             try:
                 if getattr(self._window, 'minimized', False):
                     self._window.restore()
@@ -891,8 +941,7 @@ class Bridge:
                 pass
             self._window.show()
             if hwnd:
-                user32 = ctypes.windll.user32
-                user32.SetForegroundWindow(hwnd)
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
         except Exception:
             pass
 
@@ -920,7 +969,14 @@ class Bridge:
         return {'maxed': getattr(self, '_maxed', False)}
 
     def close(self) -> None:
-        self._window_call('destroy')
+        """点 ×：按设置的关闭行为，直接退出或藏进托盘。"""
+        if str(self.config.get('closeAction') or '') == 'tray' and self.on_hide_to_tray:
+            try:
+                self.on_hide_to_tray()
+            except Exception:
+                pass
+        else:
+            self._window_call('destroy')
 
     def _window_call(self, name: str) -> None:
         if not self._window:

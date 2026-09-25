@@ -21,6 +21,8 @@ const state = {
   dropDepth: 0,
   busy: false,
   hotkey: null,
+  autostart: false,
+  closeAction: 'exit',
   sort: '',
 };
 
@@ -73,7 +75,7 @@ const SHORTCUTS = [
   ['F5', '重新读取磁盘目录'],
   ['Ctrl + T', '深色 / 浅色主题'],
   ['「更多」菜单', '把当前列表的文件名导出成 Excel'],
-  ['「清空」菜单', '分开清空文件列表 / 已添加的规则'],
+  ['「清空」按钮', '顶部清空规则，列表上方清空导入列表'],
   ['F1 / Esc', '使用说明 / 关闭弹层'],
 ];
 
@@ -158,6 +160,8 @@ function applyPayload(payload) {
   if (payload.clip) fallbackClipboard(payload.clip);
   if (payload.toast) toast(payload.toast.text, payload.toast.type);
   if (payload.dialog) showDialog(payload.dialog.title, payload.dialog.lines);
+  if (payload.autostart !== undefined && payload.autostart !== null) state.autostart = !!payload.autostart;
+  if (payload.closeAction) state.closeAction = payload.closeAction;
 }
 
 window.__onPush = function (payload) { applyPayload(payload); };
@@ -278,6 +282,8 @@ function stopHkRecord(save) {
   if (save) {
     state.hotkey = save;
     call('set_hotkey', save);
+  } else {
+    call('resume_hotkey');                 // 录制取消，恢复原来的快捷键钩子
   }
   if ($('#dialog').hidden) return;
   showSettingsDialog();                    // 重绘回显
@@ -305,14 +311,19 @@ function hkKeyCapture(e) {
 }
 
 function hkMouseCapture(e) {
-  if (e.button !== 3 && e.button !== 4) return;   // 3/4 = 侧键 X1 / X2
+  // X1（后退）：buttons 位 8；X2（前进）：buttons 位 16。
+  // 位掩码是规范定义的物理按钮状态，比 e.button 的序号更可靠，e.button 3/4 兜底
+  const isX1 = !!(e.buttons & 8) || e.button === 3;
+  const isX2 = !!(e.buttons & 16) || e.button === 4;
+  if (!isX1 && !isX2) return;
   e.preventDefault();
   e.stopImmediatePropagation();
-  stopHkRecord({ type: 'mouse', button: e.button === 3 ? 'x1' : 'x2' });
+  stopHkRecord({ type: 'mouse', button: isX1 ? 'x1' : 'x2' });
 }
 
 function startHkRecord() {
   hkRecording = true;
+  call('pause_hotkey');    // 先停掉旧钩子：否则按侧键会被钩子抢先吞掉、窗口被藏起来
   const el = $('#hkValue');
   if (el) {
     el.classList.add('rec');
@@ -325,6 +336,7 @@ function startHkRecord() {
 
 function showSettingsDialog() {
   const box = $('#dialog');
+  const trayMode = state.closeAction === 'tray';
   box.hidden = false;
   box.innerHTML =
     '<h3>设置</h3>' +
@@ -338,6 +350,19 @@ function showSettingsDialog() {
     '<button type="button" class="btn tiny" id="btnHkRecord">' + (hkRecording ? '取消录制' : '录制快捷键') + '</button>' +
     '<button type="button" class="btn tiny" id="btnHkClear">清除</button>' +
     '</div></div></div>' +
+    '<div class="set-row">' +
+    '<div class="set-info"><b>开机自启</b>' +
+    '<p>登录 Windows 后自动运行本程序（写当前用户的「启动」注册表项，不需要管理员权限，随时可关）。</p></div>' +
+    '<button type="button" class="btn tiny' + (state.autostart ? ' primary' : '') + '" id="btnAutoStart">' +
+    (state.autostart ? '已开启' : '已关闭') + '</button>' +
+    '</div>' +
+    '<div class="set-row">' +
+    '<div class="set-info"><b>关闭按钮（×）行为</b>' +
+    '<p>选「最小化到托盘」时，点 × 只藏进系统托盘，可用全局快捷键随时唤出，右键托盘图标可退出。</p></div>' +
+    '<div class="hk-actions">' +
+    '<button type="button" class="btn tiny' + (trayMode ? '' : ' primary') + '" id="btnCloseExit">直接退出</button>' +
+    '<button type="button" class="btn tiny' + (trayMode ? ' primary' : '') + '" id="btnCloseTray">最小化到托盘</button>' +
+    '</div></div>' +
     '<div class="set-row">' +
     '<div class="set-info"><b>外观</b><p>深色 / 浅色主题（也可按 Ctrl + T 快速切换）。</p></div>' +
     '<button type="button" class="btn tiny" id="btnThemeSet">切换主题</button>' +
@@ -353,6 +378,24 @@ function showSettingsDialog() {
   box.querySelector('#btnHkClear').onclick = () => {
     state.hotkey = null;
     call('set_hotkey', null);
+    showSettingsDialog();
+  };
+  box.querySelector('#btnAutoStart').onclick = async () => {
+    await call('set_autostart', !state.autostart);
+    showSettingsDialog();                  // call 回来后 state 已更新，重绘回显
+  };
+  box.querySelector('#btnCloseExit').onclick = () => {
+    if (state.closeAction !== 'exit') {
+      state.closeAction = 'exit';
+      call('set_close_action', 'exit');
+    }
+    showSettingsDialog();
+  };
+  box.querySelector('#btnCloseTray').onclick = () => {
+    if (state.closeAction !== 'tray') {
+      state.closeAction = 'tray';
+      call('set_close_action', 'tray');
+    }
     showSettingsDialog();
   };
   box.querySelector('#btnThemeSet').onclick = () => { toggleTheme(); };
@@ -374,6 +417,7 @@ function showRecordBox() {
 }
 
 function hideLayers() {
+  if (hkRecording) stopHkRecord(null);     // 弹层被点掉时也要结束录制、恢复钩子
   $('#dialog').hidden = true;
   $('#menu').hidden = true;
   $('#popmask').hidden = true;
@@ -468,8 +512,9 @@ function renderButtons() {
   $('#btnRevert').disabled = !c.revert;
   $('#btnRemove').disabled = !c.remove;
   $('#btnCopy').disabled = !c.copy;
-  // 有文件或有规则，都应该能点开「清空」选择清哪一样
-  $('#btnClear').disabled = !c.clear && !c.clearRules;
+  // 顶部「清空」清规则，列表上方「清空」清导入列表，互不影响
+  $('#btnClearRules').disabled = !c.clearRules;
+  $('#btnClearItems').disabled = !c.clear;
 }
 
 /* ------------------------------------------------------------------ 模式栏 */
@@ -1004,21 +1049,9 @@ function bindToolbar() {
   $('#btnPickFiles').onclick = () => call('pick_files');
   $('#btnPickFolder').onclick = () => call('pick_folder');
   $('#btnPaste').onclick = () => call('paste_clipboard');
-  // 「清空」下拉：文件列表和规则互不影响，分开清
-  $('#btnClear').onclick = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const c = state.can || {};
-    const s = state.stats || {};
-    const rules = (state.workflow || []).length;
-    showMenu(rect.left, rect.bottom + 6, [
-      { id: 'clearItems', text: '清空文件列表', icon: 'i-trash',
-        note: s.total ? s.total + ' 项' : '', disabled: !c.clear,
-        run: () => call('clear_items') },
-      { id: 'clearRules', text: '清空已添加的规则', icon: 'i-close',
-        note: rules ? rules + ' 条' : '', disabled: !c.clearRules,
-        run: () => clearRules() },
-    ]);
-  };
+  // 顶部「清空」直接清空已添加的规则；列表上方「清空」清空导入的文件列表
+  $('#btnClearRules').onclick = () => clearRules();
+  $('#btnClearItems').onclick = () => call('clear_items');
   $('#btnRemove').onclick = () => call('remove_items', null);
   $('#btnTheme').onclick = toggleTheme;
   $('#btnHelp').onclick = showHelpDialog;
@@ -1158,6 +1191,8 @@ async function init() {
   state.meta = meta || { rules: [] };
   (state.meta.rules || []).forEach((r) => { RULE_MAP[r.id] = r; });
   state.hotkey = (meta && meta.settings && meta.settings.hotkey) || null;
+  state.autostart = !!(meta && meta.settings && meta.settings.autostart);
+  state.closeAction = (meta && meta.settings && meta.settings.closeAction) || 'exit';
 
   let stored = null;
   try { stored = localStorage.getItem('fr-theme'); } catch (err) { stored = null; }

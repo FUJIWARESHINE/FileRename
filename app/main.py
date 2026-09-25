@@ -9,13 +9,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 
 import webview
 
+import autostart
 from bridge import Bridge, window_geometry
 
 APP_NAME = '文件批量重命名'
-APP_VERSION = '2.1.1'
+APP_VERSION = '2.2.0'
 WINDOW_TITLE = '%s v%s' % (APP_NAME, APP_VERSION)
 
 
@@ -152,6 +154,9 @@ class App:
         self.diag = diag
         self.window = None
         self.hotkeys = None
+        self.tray = None
+        self._force_exit = False           # 托盘「退出」时置位，放行窗口关闭
+        self._tray_tip_shown = bool(self.config.get('trayTipShown'))
         self.remember_maximized = False
         self._restore_rect = None
         # 前端可能在窗口线程启动前后任意时刻来取状态，这里先挂上标记
@@ -194,6 +199,7 @@ class App:
             confirm_close=False,
         )
         self.bridge.attach(self.window)
+        self.bridge.on_hide_to_tray = self._hide_to_tray
         self.window.events.loaded += self._on_loaded
         self.window.events.shown += self._on_shown
         self.window.events.closing += self._on_closing
@@ -216,18 +222,98 @@ class App:
         })
         return data
 
+    def _close_action(self) -> str:
+        """点 × 的行为：'tray' = 最小化到托盘，'exit' = 直接退出。"""
+        return 'tray' if str(self.config.get('closeAction') or '') == 'tray' else 'exit'
+
     def _on_closing(self) -> None:
         """关闭前把窗口大小 / 位置落盘。
 
         必须在这里同步写文件（pywebview 的 closed 事件跑在另一个线程里，进程
         往往等不到它执行完就退出了，原来的实现就是这么把尺寸丢掉的）；
         此时原生窗口还没销毁，用句柄读到的矩形才是用户真正调好的那个大小。
-        返回 None = 不取消关闭，不能返回 True。
+        返回 False = 取消本次关闭（藏进托盘时用），返回 None = 放行。
         """
         geometry = window_geometry(self.bridge.native_handle())
         if geometry:
             self.config['geometry'] = geometry
         save_config(self._snapshot_config())
+        if self._force_exit:
+            return None                       # 托盘「退出」：放行关闭
+        if self._close_action() == 'tray':
+            # 不在 FormClosing 里直接 hide（pywebview 的 show/hide 要派回 UI
+            # 线程，卡在这里容易死锁），先取消关闭、稍后再藏
+            threading.Timer(0.05, self._hide_to_tray).start()
+            return False
+        return None
+
+    # ------------------------------------------------------------------ 托盘
+    def _ensure_tray(self) -> None:
+        """第一次藏进托盘时创建托盘图标，之后一直挂着直到退出。"""
+        if self.tray or not self.window:
+            return
+        try:
+            from tray import TrayIcon
+            self.tray = TrayIcon(
+                resource_path('icon.ico'),
+                '%s v%s' % (APP_NAME, APP_VERSION),
+                on_open=lambda: self.bridge.show_main(),
+                on_exit=self._exit_from_tray,
+                autostart_checked=autostart.enabled,
+                on_toggle_autostart=self._toggle_autostart_from_tray)
+            self.tray.start()
+        except Exception:
+            self.tray = None
+
+    def _hide_to_tray(self) -> None:
+        """点 ×（或关闭按钮）：窗口藏进托盘，进程和全局快捷键保持活着。"""
+        geometry = window_geometry(self.bridge.native_handle())
+        if geometry:
+            self.config['geometry'] = geometry
+        save_config(self._snapshot_config())
+        self._ensure_tray()
+        try:
+            self.window.hide()
+        except Exception:
+            pass
+        # 第一次进托盘给个气泡，免得用户以为程序被关了找不回来
+        if self.tray and not self._tray_tip_shown:
+            self._tray_tip_shown = True
+            self.config['trayTipShown'] = True
+            save_config(self._snapshot_config())
+            try:
+                self.tray.notify(APP_NAME,
+                                 '已最小化到托盘：双击图标或按全局快捷键唤出，右键图标可退出')
+            except Exception:
+                pass
+
+    def _toggle_autostart_from_tray(self) -> None:
+        enable = not autostart.enabled()
+        ok, msg = autostart.set_enabled(enable)
+        if self.tray:
+            try:
+                self.tray.notify(APP_NAME, msg)
+            except Exception:
+                pass
+        self.bridge.push_toast(msg, 'ok' if ok else 'warn')
+
+    def _exit_from_tray(self) -> None:
+        self._force_exit = True
+        if self.hotkeys:
+            try:
+                self.hotkeys.stop()
+            except Exception:
+                pass
+        if self.tray:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+            self.tray = None
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
 
     def _after_start(self) -> None:
         self._apply_round_corners()
@@ -346,6 +432,12 @@ class App:
                 self.hotkeys.stop()
             except Exception:
                 pass
+        if getattr(self, 'tray', None):
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+            self.tray = None
 
 
 def enable_dpi_awareness() -> None:

@@ -68,8 +68,8 @@
       <button type="button" class="btn" id="btnPaste" title="导入资源管理器里复制的文件 / 文件夹（Ctrl+V）">
         <svg><use href="#i-paste"/></svg><span>粘贴导入</span>
       </button>
-      <button type="button" class="btn clear-menu" id="btnClear" disabled title="清空文件列表或已添加的规则">
-        <svg><use href="#i-trash"/></svg><span>清空</span><svg><use href="#i-chevd"/></svg>
+      <button type="button" class="btn clear-menu" id="btnClearRules" disabled title="清空已添加的重命名规则（文件列表不受影响）">
+        <span>清空</span>
       </button>
     </div>
     <div class="tb-group right">
@@ -111,6 +111,7 @@
               <svg><use href="#i-chevd"/></svg>
             </button>
           </label>
+          <button type="button" class="btn tiny clear-menu" id="btnClearItems" disabled title="清空导入列表（已添加的规则保留）">清空</button>
           <button type="button" class="btn tiny" id="btnSelectAll" title="全选（Ctrl+A）">全选</button>
           <button type="button" class="btn tiny" id="btnInvert" title="反选（Ctrl+I）">反选</button>
         </div>
