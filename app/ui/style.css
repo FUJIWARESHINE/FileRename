@@ -653,7 +653,8 @@ svg use { pointer-events: none; }
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
   padding: 12px 14px;
   border: 1px solid var(--stroke);
   border-radius: var(--r-lg);
@@ -662,7 +663,7 @@ svg use { pointer-events: none; }
 .set-info { min-width: 0; }
 .set-info b { display: block; font-size: 12.5px; margin-bottom: 3px; }
 .set-info p { font-size: 11.5px; line-height: 1.7; color: var(--fg-mute); }
-.hk-area { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.hk-area { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; max-width: 100%; }
 .hk-value {
   display: inline-flex;
   align-items: center;
@@ -687,7 +688,7 @@ svg use { pointer-events: none; }
   0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, .35); }
   50% { box-shadow: 0 0 0 6px rgba(99, 102, 241, 0); }
 }
-.hk-actions { display: flex; gap: 6px; }
+.hk-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 [data-theme="light"] .fake-select { background: #fff; }
 [data-theme="light"] .fake-select:focus-visible { background: #fff; }
 [data-theme="light"] .set-row { background: rgba(15, 23, 42, .025); }
@@ -1080,9 +1081,14 @@ svg use { pointer-events: none; }
   z-index: 380;
   left: 50%;
   top: 50%;
+  /* 居中只靠 translate；入场动画必须以同样的 transform 结束，
+     否则 fill-mode: both 会把结束帧的 transform: none 永久套上，
+     弹窗左上角会钉死在窗口中心、整体向右下溢出（按钮被窗口边缘裁掉就是这个原因） */
   transform: translate(-50%, -50%);
   width: 460px;
-  max-height: 70vh;
+  max-width: calc(100vw - 32px);
+  max-height: min(78vh, 640px);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   padding: 18px;
@@ -1091,11 +1097,25 @@ svg use { pointer-events: none; }
   background: rgba(16, 21, 36, .98);
   backdrop-filter: blur(18px);
   box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 1);
-  animation: popIn .24s var(--ease) both;
+  animation: dialogIn .24s var(--ease) both;
+}
+/* 弹窗专用入场：首尾帧都带 translate(-50%,-50%)，动画结束后仍保持居中 */
+@keyframes dialogIn {
+  from { opacity: 0; transform: translate(-50%, calc(-50% - 10px)) scale(.98); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+/* 设置弹窗内容超高时：标题和「完成」按钮固定，仅中间内容滚动 */
+.dialog > .set-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .dialog h3 { font-size: 14px; margin-bottom: 12px; }
 .dialog-body {
   overflow-y: auto;
+  min-height: 0;    /* flex 列里必须允许收缩，超高才能滚 */
+  flex: 0 1 auto;
   font-size: 12px;
   line-height: 1.85;
   color: var(--fg-dim);
